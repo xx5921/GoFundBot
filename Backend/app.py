@@ -477,11 +477,31 @@ def get_watchlist():
             'sort_order': group.sort_order
         })
     
-    # 构建基金数据
+    # 构建基金数据（净值优先用走势数据中最新的实际净值）
     funds_data = []
     for item in watchlist:
         estimate = db.query(FundEstimate).filter(FundEstimate.fund_code == item.fund_code).first()
-        
+        trend = db.query(FundTrend).filter(FundTrend.fund_code == item.fund_code).first()
+
+        # 默认用 FundEstimate 的数据
+        net_worth = estimate.net_worth if estimate else None
+        net_worth_date = estimate.net_worth_date if estimate else None
+
+        # 检查走势数据中是否有更新的实际净值
+        if trend and trend.net_worth_trend_json:
+            trend_data = _json_loads(trend.net_worth_trend_json, [])
+            if trend_data:
+                # 找最新日期的净值
+                valid = [t for t in trend_data if t.get('date') and t.get('net_worth') is not None]
+                if valid:
+                    valid.sort(key=lambda x: x['date'])
+                    latest = valid[-1]
+                    trend_date = latest['date']
+                    # 如果走势数据比 FundEstimate 的净值日期更新，使用走势数据
+                    if not net_worth_date or trend_date > net_worth_date:
+                        net_worth = str(latest['net_worth'])
+                        net_worth_date = trend_date
+
         fund_data = {
             'fund_code': item.fund_code,
             'fund_name': item.fund_name,
@@ -489,14 +509,14 @@ def get_watchlist():
             'group_id': item.group_id,
             'sort_order': item.sort_order,
             'created_time': item.created_time.isoformat() if item.created_time else None,
-            'net_worth': estimate.net_worth if estimate else None,
-            'net_worth_date': estimate.net_worth_date if estimate else None,
+            'net_worth': net_worth,
+            'net_worth_date': net_worth_date,
             'estimate_value': estimate.estimate_value if estimate else None,
             'estimate_change': estimate.estimate_change if estimate else None,
             'estimate_time': estimate.estimate_time if estimate else None
         }
         funds_data.append(fund_data)
-    
+
     return jsonify({
         'groups': groups_data,
         'data': funds_data
@@ -829,15 +849,35 @@ def refresh_watchlist_estimates():
                                 estimate_time=rt_data.get('gztime')
                             )
                             db.add(estimate_record)
-                        
+
+                        # 检查走势数据中是否有更新的实际净值
+                        trend_record = db.query(FundTrend).filter(
+                            FundTrend.fund_code == fund_code
+                        ).first()
+                        net_worth_val = rt_data.get('dwjz')
+                        net_worth_date_val = rt_data.get('jzrq')
+                        if trend_record and trend_record.net_worth_trend_json:
+                            trend_data = _json_loads(trend_record.net_worth_trend_json, [])
+                            if trend_data:
+                                valid = [t for t in trend_data if t.get('date') and t.get('net_worth') is not None]
+                                if valid:
+                                    valid.sort(key=lambda x: x['date'])
+                                    latest = valid[-1]
+                                    if not net_worth_date_val or latest['date'] > net_worth_date_val:
+                                        net_worth_val = str(latest['net_worth'])
+                                        net_worth_date_val = latest['date']
+                                        # 同时更新 FundEstimate
+                                        estimate_record.net_worth = net_worth_val
+                                        estimate_record.net_worth_date = net_worth_date_val
+
                         updated_count += 1
                         results.append({
                             'fund_code': fund_code,
                             'estimate_value': rt_data.get('gsz'),
                             'estimate_change': rt_data.get('gszzl'),
                             'estimate_time': rt_data.get('gztime'),
-                            'net_worth': rt_data.get('dwjz'),
-                            'net_worth_date': rt_data.get('jzrq')
+                            'net_worth': net_worth_val,
+                            'net_worth_date': net_worth_date_val
                         })
         except Exception as e:
             # 单个基金失败不影响其他

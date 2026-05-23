@@ -49,8 +49,8 @@
 
       <!-- 最新净值 -->
       <div class="col-nav">
-        <div class="nav-value">{{ fund.net_worth || fund.estimate_value || '--' }}</div>
-        <div class="nav-date">{{ fund.net_worth_date || fund.estimate_time || '' }}</div>
+        <div class="nav-value">{{ getLatestNav(fund) }}</div>
+        <div class="nav-date">{{ getLatestNavDate(fund) }}</div>
       </div>
 
       <!-- 日涨跌幅 -->
@@ -118,6 +118,23 @@ export default {
       if (num > 0) return 'change-up'
       if (num < 0) return 'change-down'
       return 'change-flat'
+    },
+    getLatestNav(fund) {
+      const netWorthDate = (fund.net_worth_date || '').slice(0, 10)
+      const estimateDate = (fund.estimate_time || '').slice(0, 10)
+      // 估值日期比净值日期更新 → 用估值
+      if (estimateDate && estimateDate > netWorthDate) {
+        return fund.estimate_value || fund.net_worth || '--'
+      }
+      return fund.net_worth || fund.estimate_value || '--'
+    },
+    getLatestNavDate(fund) {
+      const netWorthDate = (fund.net_worth_date || '').slice(0, 10)
+      const estimateDate = (fund.estimate_time || '').slice(0, 10)
+      if (estimateDate && estimateDate > netWorthDate) {
+        return estimateDate
+      }
+      return netWorthDate || estimateDate
     }
   }
 }
