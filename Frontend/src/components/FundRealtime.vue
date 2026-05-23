@@ -126,6 +126,29 @@
           <div class="hero-chip" :class="getHoldingProfitTodayClass(fund)" v-if="holdings[fund.code]">
             {{ getHoldingProfitToday(fund) >= 0 ? '+' : '' }}¥{{ getHoldingProfitToday(fund).toFixed(2) }}
           </div>
+          <!-- 有持仓：显示AI建议按钮/结果 -->
+          <template v-if="holdings[fund.code]">
+            <div
+              v-if="adviceMap[fund.code]"
+              class="hero-chip ai-advice-badge"
+              :style="{ background: actionColor(adviceMap[fund.code].action_type) }"
+              :title="adviceMap[fund.code].reason"
+            >
+              {{ adviceMap[fund.code].action }}
+            </div>
+            <button
+              v-else
+              class="hero-chip ai-btn"
+              :disabled="adviceLoading[fund.code]"
+              @click.stop="fetchAIAdvice(fund)"
+            >
+              {{ adviceLoading[fund.code] ? 'AI分析中...' : '🤖 AI建议' }}
+            </button>
+          </template>
+          <!-- 无持仓：用规则兜底 -->
+          <div v-else class="hero-chip advice-chip" :style="{ background: getFundAdvice(fund).color }">
+            {{ getFundAdvice(fund).label }}
+          </div>
         </div>
 
         <div class="c-holdings-area">
@@ -342,6 +365,8 @@ export default {
     const funds = ref([])
     const holdings = ref({})  // { code: { share, cost } }
     const collapsedCodes = ref(new Set())
+    const adviceMap = ref({})       // { [code]: { action, action_type, confidence, summary, reason, key_points } }
+    const adviceLoading = ref({})   // { [code]: true/false }
     const refreshing = ref(false)
     const refreshMs = ref(30000)
     const searchTerm = ref('')
@@ -654,6 +679,91 @@ export default {
         .map(parseTrendPoint)
         .filter(Boolean)
         .sort((a, b) => a.date.localeCompare(b.date))
+    }
+
+    // ---- 加仓/卖出建议 ----
+    const getFundAdvice = (fund) => {
+      try {
+        const trend = getFundTrendSeries(fund)
+        if (!trend || trend.length < 10) return { label: '数据不足', color: '#94a3b8' }
+
+        const nav = parseFloat(fund?.gsz) || parseFloat(fund?.dwjz) || 0
+        if (nav <= 0) return { label: '数据不足', color: '#94a3b8' }
+
+        const h = holdings.value[fund.code]
+        const pRate = h && h.share > 0 && h.cost > 0
+          ? ((nav - h.cost) / h.cost) * 100
+          : 0
+
+        // 区间位置
+        const recent60 = trend.slice(-60)
+        const vals = recent60.map(t => t.nav)
+        const high = Math.max(...vals)
+        const low = Math.min(...vals)
+        const rangePct = high > low ? ((nav - low) / (high - low)) * 100 : 50
+
+        // 趋势方向
+        const recent10 = trend.slice(-10)
+        const half = Math.floor(recent10.length / 2)
+        const firstAvg = recent10.slice(0, half).reduce((s, t) => s + t.nav, 0) / half
+        const secondAvg = recent10.slice(-half).reduce((s, t) => s + t.nav, 0) / half
+        const trendPct = firstAvg > 0 ? ((secondAvg - firstAvg) / firstAvg) * 100 : 0
+
+        let score = 0
+
+        if (rangePct < 20) score += 3
+        else if (rangePct < 35) score += 2
+        else if (rangePct < 50) score += 1
+        else if (rangePct > 85) score -= 2
+        else if (rangePct > 65) score -= 1
+
+        if (pRate < -15) score += 2
+        else if (pRate < -5) score += 1
+        else if (pRate > 20) score -= 3
+        else if (pRate > 10) score -= 1
+
+        if (trendPct < -2) score += 1
+        else if (trendPct > 3) score -= 1
+
+        if (score >= 3) return { label: '强烈加仓', color: '#16a34a' }
+        if (score >= 1) return { label: '可加仓', color: '#22c55e' }
+        if (score === 0) return { label: '持有观望', color: '#f59e0b' }
+        if (score >= -2) return { label: '谨慎持有', color: '#f97316' }
+        return { label: '建议减仓', color: '#ef4444' }
+      } catch (e) {
+        console.error('getFundAdvice error:', e)
+        return { label: '--', color: '#94a3b8' }
+      }
+    }
+
+    // ---- AI 持仓操作建议 ----
+    const fetchAIAdvice = async (fund) => {
+      const h = holdings.value[fund.code]
+      if (!h || !h.share) return
+
+      const code = fund.code
+      adviceLoading.value = { ...adviceLoading.value, [code]: true }
+      try {
+        const response = await fundAPI.getPositionAdvice(code, {
+          cost: h.cost,
+          shares: h.share,
+          purchase_date: h.buy_date || '',
+          purchase_time: '15:00'
+        })
+        const data = response?.data
+        if (data && !data.error) {
+          adviceMap.value = { ...adviceMap.value, [code]: data }
+        }
+      } catch (e) {
+        console.error('AI advice fetch error:', e)
+      } finally {
+        adviceLoading.value = { ...adviceLoading.value, [code]: false }
+      }
+    }
+
+    const actionColor = (actionType) => {
+      const map = { buy: '#16a34a', hold: '#f59e0b', sell: '#ef4444' }
+      return map[actionType] || '#94a3b8'
     }
 
     const getFundNavByDate = (fund, dateStr) => {
@@ -1241,6 +1351,10 @@ export default {
       modalTab,
       tradeForm,
       isTradingTime,
+      adviceMap,
+      adviceLoading,
+      fetchAIAdvice,
+      actionColor,
       sortedFunds,
       hasHoldings,
       totalAsset,
@@ -1264,6 +1378,7 @@ export default {
       isSelected,
       toggleSelectFund,
       getFundNavByDate,
+      getFundAdvice,
       getFundSparklinePoints,
       getFundSparklinePoints3m,
       getFundMiniChart3m,
@@ -1377,6 +1492,11 @@ export default {
 .hero-chip { padding: 4px 12px; border-radius: 4px; font-weight: bold; font-size: 16px; }
 .hero-chip.up { color: #f5222d; background: #fff1f0; }
 .hero-chip.down { color: #52c41a; background: #f6ffed; }
+.advice-chip { color: #fff !important; font-size: 13px !important; }
+.ai-btn { background: linear-gradient(135deg, #667eea, #764ba2) !important; color: #fff !important; font-size: 12px !important; cursor: pointer; border: none; }
+.ai-btn:hover:not(:disabled) { opacity: 0.85; transform: scale(1.02); }
+.ai-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.ai-advice-badge { color: #fff !important; font-size: 12px !important; cursor: help; }
 
 .c-holdings-area { background: #f8f9fc; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
 .c-h-head { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 13px; font-weight: bold; align-items: center;}

@@ -37,7 +37,7 @@
             </button>
             <button 
               class="mode-btn" 
-              :class="{ active: viewMode === 'realtime' }"
+              :class="{ active: viewMode === 'portfolio' }"
               @click="viewMode = 'portfolio'"
             >
               📊 估值与持仓

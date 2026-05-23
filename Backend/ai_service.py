@@ -454,6 +454,213 @@ class AIService:
             }
 
 
+    def analyze_position_advice(self, fund_data: Dict[str, Any], position: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        基于持仓情况，使用 AI 分析当前应加仓、减仓还是持有
+
+        Args:
+            fund_data: 基金数据，包含 basic_info, performance, net_worth_trend, realtime_estimate 等
+            position: 持仓数据，包含 cost, shares, purchase_date, purchase_time 等
+
+        Returns:
+            分析结果字典
+        """
+        if not self.is_available():
+            return {"error": "AI 服务未配置"}
+
+        try:
+            prompt = self._build_position_advice_prompt(fund_data, position)
+
+            system_prompt = """你是一位资深基金投资顾问，精通中国公募基金交易规则和持仓管理策略。
+
+**中国基金交易规则要点（必须牢记）**：
+1. T日15:00前申购/赎回，按T日净值确认；15:00后按T+1日净值
+2. 基金实行T+1确认制度，当日买入次日才能查看确认份额
+3. 持有不足7天赎回有1.5%惩罚性赎回费
+4. 场外基金净值每日公布一次（通常在晚间20:00-22:00）
+5. 交易日为周一至周五（法定节假日除外）
+6. 基金分红方式：现金分红和红利再投资
+
+**分析要点**：
+- 结合用户的成本价、持有时间、盈亏状况分析
+- 考虑当前市场估值水平和基金近期走势
+- 注意区分交易时间和非交易时间的操作建议
+- 如果用户持有不足7天，赎回建议要特别谨慎
+
+**输出格式（严格JSON，不要任何额外内容）**：
+```json
+{
+    "action": "强烈加仓"/"适度加仓"/"持有观望"/"逐步减仓"/"清仓卖出",
+    "action_type": "buy"/"hold"/"sell",
+    "confidence": 0-100,
+    "summary": "一句话总结建议理由（30字内）",
+    "reason": "详细分析理由（100-150字），包含：1.当前估值位置判断；2.盈亏状态分析；3.交易规则考量（如持有天数、15:00节点等）；4.风险提示",
+    "key_points": ["关键分析点1", "关键分析点2", "关键分析点3"]
+}
+```
+
+**action 判断参考**：
+- 当前净值处于近60日低位（低于20%分位）且亏损超过5% → 强烈加仓
+- 当前净值处于近60日中低位（20%-35%分位）→ 适度加仓
+- 处于中位区域（35%-65%）盈亏不大 → 持有观望
+- 获利超过15%且净值处于高位 → 逐步减仓
+- 获利超过30%或净值处于极高位置 → 清仓卖出
+
+注意：以上仅为参考框架，请结合具体数据灵活判断，不要机械套用。"""
+            result = self._call_llm_simple(prompt, system_prompt)
+
+            if not result:
+                return {"error": "AI 分析失败，请稍后重试"}
+
+            return self._parse_position_advice_result(result)
+
+        except Exception as e:
+            print(f"持仓建议分析出错: {e}")
+            return {"error": f"分析出错: {str(e)}"}
+
+    def _build_position_advice_prompt(self, fund_data: Dict[str, Any], position: Dict[str, Any]) -> str:
+        """构建持仓建议分析提示"""
+        basic_info = fund_data.get('basic_info', {})
+        performance = fund_data.get('performance', {})
+        realtime = fund_data.get('realtime_estimate', {})
+        risk_metrics = fund_data.get('risk_metrics', {})
+        net_worth_trend = fund_data.get('net_worth_trend', [])
+
+        from datetime import datetime, timezone, timedelta
+        CHINA_TZ = timezone(timedelta(hours=8))
+        now = datetime.now(CHINA_TZ)
+        today_str = now.strftime('%Y-%m-%d')
+        current_time = now.strftime('%H:%M')
+        is_trading_day = now.weekday() < 5  # 简单判断，不考虑节假日
+        is_before_1500 = current_time < '15:00'
+
+        prompt = f"""当前时间：{today_str} {current_time}（{'交易日，' + ('15:00前' if is_before_1500 else '15:00后') if is_trading_day else '非交易日'}）
+
+## 基金信息
+- 名称：{basic_info.get('fund_name', '未知')}
+- 代码：{basic_info.get('fund_code', '未知')}
+- 类型：{basic_info.get('fund_type', '未知')}
+- 费率：{basic_info.get('current_rate', '未知')}%
+
+## 实时估值
+- 估算净值：{realtime.get('estimate_value', '未知')}
+- 估算涨跌幅：{realtime.get('estimate_change', '未知')}%
+- 估值时间：{realtime.get('estimate_time', '未知')}
+- 最新单位净值：{realtime.get('net_worth', '未知')}
+- 净值日期：{realtime.get('net_worth_date', '未知')}
+
+## 业绩表现
+- 近1月：{performance.get('1_month_return', '未知')}%
+- 近3月：{performance.get('3_month_return', '未知')}%
+- 近6月：{performance.get('6_month_return', '未知')}%
+- 近1年：{performance.get('1_year_return', '未知')}%
+"""
+
+        # 风险指标
+        if risk_metrics:
+            prompt += f"""
+## 风险指标
+- 近1年夏普比率：{risk_metrics.get('sharpe_ratio_1y', '未知')}
+- 近1年最大回撤：{risk_metrics.get('max_drawdown_1y', '未知')}%
+- 近1年年化波动率：{risk_metrics.get('volatility_1y', '未知')}%
+- 近1年年化收益：{risk_metrics.get('annual_return_1y', '未知')}%
+"""
+
+        # 近期走势摘要
+        if net_worth_trend:
+            sorted_trend = sorted(
+                [t for t in net_worth_trend if t.get('date') and t.get('net_worth') is not None],
+                key=lambda x: x['date']
+            )
+            if len(sorted_trend) >= 5:
+                recent = sorted_trend[-10:]
+                prompt += "\n## 近10个交易日净值走势\n"
+                for p in recent:
+                    prompt += f"- {p['date']}: {p['net_worth']}\n"
+
+                # 60日高低点
+                recent60 = sorted_trend[-60:] if len(sorted_trend) >= 60 else sorted_trend
+                vals = [float(t['net_worth']) for t in recent60]
+                prompt += f"\n近{len(recent60)}日最高净值: {max(vals)}, 最低净值: {min(vals)}"
+                if realtime.get('estimate_value'):
+                    cur = float(realtime['estimate_value'])
+                    pos_pct = round((cur - min(vals)) / (max(vals) - min(vals)) * 100, 1) if max(vals) > min(vals) else 50
+                    prompt += f"\n当前净值在近{len(recent60)}日区间位置: {pos_pct}%（0%为最低点，100%为最高点）"
+
+        # 持仓信息
+        purchase_date = position.get('purchase_date', '未知')
+        purchase_time = position.get('purchase_time', '15:00')
+        cost = float(position.get('cost', 0))
+        shares = float(position.get('shares', 0))
+        cost_amount = cost * shares
+
+        cur_nav = float(realtime.get('estimate_value') or realtime.get('net_worth') or cost)
+        market_value = shares * cur_nav
+        profit = market_value - cost_amount
+        profit_rate = (profit / cost_amount * 100) if cost_amount > 0 else 0
+
+        # 计算持有天数
+        try:
+            purchase_dt = datetime.strptime(purchase_date, '%Y-%m-%d')
+            hold_days = (now - purchase_dt.replace(tzinfo=CHINA_TZ)).days
+        except:
+            hold_days = -1
+
+        prompt += f"""
+## 我的持仓
+- 买入日期：{purchase_date}
+- 买入时间：{purchase_time}（{'15:00前' if purchase_time < '15:00' else '15:00后'}）
+- 成本净值：{cost}
+- 持有份额：{shares:.2f}
+- 持仓成本：¥{cost_amount:.2f}
+- 当前市值：¥{market_value:.2f}
+- 浮动盈亏：¥{profit:.2f}（{profit_rate:+.2f}%）
+- 已持有天数：{hold_days}天
+"""
+
+        if hold_days > 0 and hold_days < 7:
+            prompt += "\n⚠️ 注意：持有不足7天，赎回将产生1.5%惩罚性赎回费！"
+
+        prompt += f"""
+---
+请基于以上数据，结合当前时间（{today_str} {current_time}，{'交易日' if is_trading_day else '非交易日'}），给出专业的持仓操作建议。"""
+
+        return prompt
+
+    def _parse_position_advice_result(self, result: str) -> Dict[str, Any]:
+        """解析持仓建议分析结果"""
+        import re, json
+        try:
+            json_match = re.search(r'```json\s*([\s\S]*?)\s*```', result)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                json_str = result.strip()
+                start = json_str.find('{')
+                end = json_str.rfind('}')
+                if start != -1 and end != -1:
+                    json_str = json_str[start:end+1]
+
+            data = json.loads(json_str)
+            return {
+                "action": data.get("action", "持有观望"),
+                "action_type": data.get("action_type", "hold"),
+                "confidence": data.get("confidence", 50),
+                "summary": data.get("summary", "无法生成建议"),
+                "reason": data.get("reason", ""),
+                "key_points": data.get("key_points", [])
+            }
+        except:
+            return {
+                "action": "持有观望",
+                "action_type": "hold",
+                "confidence": 30,
+                "summary": "AI分析结果解析失败",
+                "reason": result[:300] if result else "",
+                "key_points": []
+            }
+
+
 # 单例实例
 _ai_service_instance: Optional[AIService] = None
 

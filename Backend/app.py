@@ -382,6 +382,33 @@ def analyze_fund(fund_code):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/fund/<fund_code>/position-advice', methods=['POST'])
+def get_position_advice(fund_code):
+    """
+    AI 持仓操作建议
+    根据基金走势、实时估值和用户持仓数据，给出加仓/减仓/持有建议
+    """
+    if not fund_code:
+        return jsonify({"error": "Fund code is required"}), 400
+
+    position = request.get_json() or {}
+
+    # 获取基金数据
+    fund_data = fund_api.get_fund_data(fund_code)
+    if not fund_data:
+        return jsonify({"error": "Fund data not found"}), 404
+
+    try:
+        ai_service = get_ai_service()
+        if not ai_service.is_available():
+            return jsonify({"error": "AI service not configured"}), 503
+
+        result = ai_service.analyze_position_advice(fund_data, position)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/fund/<fund_code>/basic', methods=['GET'])
 def get_fund_basic(fund_code):
     """获取基金基础信息 实时调用API"""
