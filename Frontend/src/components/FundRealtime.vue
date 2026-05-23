@@ -1067,6 +1067,20 @@ export default {
       const targetCode = normalizeFundCode(code)
       funds.value = funds.value.filter(f => normalizeFundCode(f.code) !== targetCode)
       localStorage.setItem('realtime_funds', JSON.stringify(funds.value))
+
+      // 同步清理该基金的持仓数据和AI建议缓存
+      if (holdings.value[targetCode]) {
+        const newHoldings = { ...holdings.value }
+        delete newHoldings[targetCode]
+        holdings.value = newHoldings
+        localStorage.setItem('realtime_holdings', JSON.stringify(newHoldings))
+      }
+      if (adviceMap.value[targetCode]) {
+        const newAdvice = { ...adviceMap.value }
+        delete newAdvice[targetCode]
+        adviceMap.value = newAdvice
+      }
+
       if (activeTab.value !== 'watch' && displayFunds.value.length === 0) {
         activeTab.value = 'watch'
       }
@@ -1284,11 +1298,19 @@ export default {
         
         const savedHoldings = JSON.parse(localStorage.getItem('realtime_holdings') || '{}')
         if (savedHoldings && typeof savedHoldings === 'object') {
+          const fundCodes = new Set(funds.value.map(f => f.code))
           const normalizedHoldings = {}
           Object.entries(savedHoldings).forEach(([code, value]) => {
-            normalizedHoldings[normalizeFundCode(code)] = value
+            const normalized = normalizeFundCode(code)
+            if (fundCodes.has(normalized)) {  // 只保留基金列表中存在的持仓
+              normalizedHoldings[normalized] = value
+            }
           })
           holdings.value = normalizedHoldings
+          // 回写清理后的数据
+          if (Object.keys(normalizedHoldings).length !== Object.keys(savedHoldings).length) {
+            localStorage.setItem('realtime_holdings', JSON.stringify(normalizedHoldings))
+          }
         }
         
         const savedMs = parseInt(localStorage.getItem('realtime_refresh_ms') || '30000', 10)
