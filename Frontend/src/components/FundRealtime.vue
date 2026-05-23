@@ -360,6 +360,14 @@ export default {
     const searchLoading = ref(false)
     const todayDate = ref(new Date().toISOString().slice(0, 10))
 
+    const normalizeFundCode = (code) => {
+      const text = String(code || '').trim()
+      if (/^\d+$/.test(text) && text.length < 6) {
+        return text.padStart(6, '0')
+      }
+      return text
+    }
+
     // 持仓弹窗
     const holdingModal = ref({ open: false, fund: null })
     const holdingForm = ref({ amount: '', buyDate: todayDate.value })
@@ -510,11 +518,11 @@ export default {
       return (num >= 0 ? '+' : '') + num.toFixed(2) + '%'
     }
 
-    // 持有金额 = 上一交易日净值 × 份额（实际金额）
+    // 持仓成本 = 平均成本 × 份额
     const getHoldingAmount = (fund) => {
       const h = holdings.value[fund.code]
       if (!h || !h.share) return 0
-      const nav = parseFloat(fund.dwjz) || 0
+      const nav = parseFloat(h.cost) || 0
       return h.share * nav
     }
 
@@ -606,7 +614,7 @@ export default {
       const basic = detail?.basic_info || {}
       const changeNum = Number(realtime.estimate_change)
       return {
-        code: realtime.fund_code || basic.fund_code || fallbackCode,
+        code: normalizeFundCode(realtime.fund_code || basic.fund_code || fallbackCode),
         name: realtime.name || basic.fund_name || fallbackCode,
         dwjz: realtime.net_worth,
         gsz: realtime.estimate_value,
@@ -856,17 +864,17 @@ export default {
 
     // 从自选添加
     const addFundToRealtime = async (fundInfo) => {
-      const code = fundInfo.fund_code || fundInfo.code || fundInfo.CODE
+      const code = normalizeFundCode(fundInfo.fund_code || fundInfo.code || fundInfo.CODE)
       if (!code) return
       
       // 已存在检查
-      if (funds.value.some(f => f.code === String(code))) {
+      if (funds.value.some(f => normalizeFundCode(f.code) === code)) {
          return 
       }
       
       refreshing.value = true
       try {
-        const data = await fetchFundData(String(code))
+        const data = await fetchFundData(code)
         funds.value = [data, ...funds.value]
         localStorage.setItem('realtime_funds', JSON.stringify(funds.value))
       } catch(e) {
@@ -889,9 +897,10 @@ export default {
       try {
         const newFunds = []
         for (const f of selectedFunds.value) {
-          if (funds.value.some(existing => existing.code === f.CODE)) continue
+          const code = normalizeFundCode(f.CODE)
+          if (funds.value.some(existing => normalizeFundCode(existing.code) === code)) continue
           try {
-            const data = await fetchFundData(f.CODE)
+            const data = await fetchFundData(code)
             newFunds.push(data)
           } catch (e) {
             console.error(`添加基金 ${f.CODE} 失败`, e)
@@ -925,7 +934,7 @@ export default {
         const updated = []
         for (const fund of funds.value) {
           try {
-            const data = await fetchFundData(fund.code)
+            const data = await fetchFundData(normalizeFundCode(fund.code))
             updated.push(data)
           } catch (e) {
             console.error(`刷新基金 ${fund.code} 失败`, e)
@@ -945,7 +954,8 @@ export default {
 
     // 删除基金
     const removeFund = (code) => {
-      funds.value = funds.value.filter(f => f.code !== code)
+      const targetCode = normalizeFundCode(code)
+      funds.value = funds.value.filter(f => normalizeFundCode(f.code) !== targetCode)
       localStorage.setItem('realtime_funds', JSON.stringify(funds.value))
       if (activeTab.value !== 'watch' && displayFunds.value.length === 0) {
         activeTab.value = 'watch'
@@ -955,7 +965,8 @@ export default {
     // 持仓弹窗
     const openHoldingModal = (fund) => {
       holdingModal.value = { open: true, fund }
-      const h = holdings.value[fund.code]
+      const code = normalizeFundCode(fund.code)
+      const h = holdings.value[code]
       // 如果有现有持仓，根据份额和净值计算金额
       if (h && h.share) {
         const nav = h.cost || parseFloat(fund.dwjz) || 1
@@ -984,6 +995,7 @@ export default {
     const saveHolding = () => {
       const fund = holdingModal.value.fund
       if (!fund) return
+      const code = normalizeFundCode(fund.code)
       
       const amount = parseFloat(holdingForm.value.amount)
       const buyDate = holdingForm.value.buyDate || fund.jzrq || todayDate.value
@@ -997,7 +1009,7 @@ export default {
       const share = amount / nav
       
       const newHoldings = { ...holdings.value }
-      newHoldings[fund.code] = {
+      newHoldings[code] = {
         share: share,
         cost: nav,
         buy_date: buyDate
@@ -1011,9 +1023,10 @@ export default {
     const clearHolding = () => {
       const fund = holdingModal.value.fund
       if (!fund) return
+      const code = normalizeFundCode(fund.code)
       
       const newHoldings = { ...holdings.value }
-      delete newHoldings[fund.code]
+      delete newHoldings[code]
       holdings.value = newHoldings
       localStorage.setItem('realtime_holdings', JSON.stringify(newHoldings))
       closeHoldingModal()
@@ -1040,13 +1053,14 @@ export default {
     const saveTrade = () => {
       const fund = holdingModal.value.fund
       if (!fund) return
+      const code = normalizeFundCode(fund.code)
 
       const amount = parseFloat(tradeForm.value.amount)
       const nav = getTradeNav()
       if (!amount || amount <= 0 || nav <= 0) return
 
       const tradeShares = amount / nav
-      const h = holdings.value[fund.code] || { share: 0, cost: 0 }
+      const h = holdings.value[code] || { share: 0, cost: 0 }
       const newHoldings = { ...holdings.value }
 
       if (tradeForm.value.type === 'buy') {
@@ -1055,7 +1069,7 @@ export default {
         const newAvgCost = h.share > 0
           ? (h.share * h.cost + amount) / newTotalShares
           : nav
-        newHoldings[fund.code] = {
+        newHoldings[code] = {
           share: newTotalShares,
           cost: newAvgCost
         }
@@ -1063,9 +1077,9 @@ export default {
         // 减仓：份额减少，成本价不变
         const newTotalShares = h.share - tradeShares
         if (newTotalShares <= 0.01) {
-          delete newHoldings[fund.code]
+          delete newHoldings[code]
         } else {
-          newHoldings[fund.code] = {
+          newHoldings[code] = {
             share: newTotalShares,
             cost: h.cost
           }
@@ -1151,13 +1165,20 @@ export default {
       try {
         const savedFunds = JSON.parse(localStorage.getItem('realtime_funds') || '[]')
         if (Array.isArray(savedFunds) && savedFunds.length) {
-          funds.value = savedFunds
+          funds.value = savedFunds.map(item => ({
+            ...item,
+            code: normalizeFundCode(item.code)
+          }))
           refreshAll()
         }
         
         const savedHoldings = JSON.parse(localStorage.getItem('realtime_holdings') || '{}')
         if (savedHoldings && typeof savedHoldings === 'object') {
-          holdings.value = savedHoldings
+          const normalizedHoldings = {}
+          Object.entries(savedHoldings).forEach(([code, value]) => {
+            normalizedHoldings[normalizeFundCode(code)] = value
+          })
+          holdings.value = normalizedHoldings
         }
         
         const savedMs = parseInt(localStorage.getItem('realtime_refresh_ms') || '30000', 10)

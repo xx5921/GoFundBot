@@ -1,9 +1,11 @@
 import requests
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Union
 from stock_service import StockService
+
+CHINA_TIMEZONE = timezone(timedelta(hours=8))
 
 # --- 数据清洗器 (原 api_handler.py) ---
 
@@ -11,6 +13,20 @@ class FundDataCleaner:
     def __init__(self):
         self.cleaned_data = {}
         self.stock_service = StockService()
+
+    def normalize_fund_code(self, code: Any) -> str:
+        """规范化基金代码为6位字符串。
+
+        Args:
+            code: 原始基金代码，可能是字符串或数字。
+
+        Returns:
+            规范化后的6位基金代码字符串。
+        """
+        code_text = str(code).strip() if code is not None else ''
+        if code_text.isdigit() and len(code_text) < 6:
+            return code_text.zfill(6)
+        return code_text
     
     def clean_js_variable(self, value: str) -> Any:
         """清洗JavaScript变量值"""
@@ -40,7 +56,10 @@ class FundDataCleaner:
     def parse_timestamp(self, timestamp: int) -> str:
         """将时间戳转换为日期字符串"""
         try:
-            return datetime.fromtimestamp(timestamp / 1000).strftime('%Y-%m-%d')
+            return datetime.fromtimestamp(
+                timestamp / 1000,
+                tz=CHINA_TIMEZONE
+            ).strftime('%Y-%m-%d')
         except (ValueError, TypeError):
             return str(timestamp)
     
@@ -135,7 +154,7 @@ class FundDataCleaner:
     
     def clean_fund_info(self, raw_data: Dict[str, Any]) -> Dict[str, Any]:
         """清洗基金基本信息"""
-        fund_code = self.clean_js_variable(raw_data.get('fS_code'))
+        fund_code = self.normalize_fund_code(raw_data.get('fS_code'))
         
         # 尝试从本地缓存中获取基金类型
         fund_type = raw_data.get('fund_type_from_cache')
@@ -292,7 +311,7 @@ class FundDataCleaner:
             # 实时估值数据（来自 fundgz 接口）
             'realtime_estimate': {
                 'name': raw_data.get('name'),           # 基金名称
-                'fund_code': raw_data.get('fundcode'),  # 基金代码
+                'fund_code': self.normalize_fund_code(raw_data.get('fundcode')),  # 基金代码
                 'net_worth': raw_data.get('dwjz'),      # 单位净值
                 'net_worth_date': raw_data.get('jzrq'), # 净值日期
                 'estimate_value': raw_data.get('gsz'),  # 估算净值

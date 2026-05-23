@@ -175,7 +175,7 @@ export default {
 
         // Prepare Percentage Data
         const toPercent = (val) => startVal !== 0 ? parseFloat(((val - startVal) / startVal * 100).toFixed(2)) : 0
-        const percentTrend = filtered.map(item => [item[0], toPercent(item[1])])
+        const percentTrend = filtered.map(item => [item[0], toPercent(item[1]), item[1]])
 
         // Calculate Max Drawdown & Recovery
         let curMaxdd = 0;
@@ -280,7 +280,7 @@ export default {
         series: []
       }
 
-      if (activeTab.value === 'performance') {
+        if (activeTab.value === 'performance') {
           const { netWorth } = processData()
           option.series.push({
               name: '本基金',
@@ -300,7 +300,10 @@ export default {
           option.tooltip.formatter = function (params) {
               let res = '<div>' + echarts.format.formatTime('yyyy-MM-dd', params[0].value[0]) + '</div>'
               params.forEach(item => {
-                  res += `<div>${item.marker} ${item.seriesName}: ${item.value[1]}%</div>`
+                  const percent = item.value[1]
+                  const nav = item.value[2]
+                  res += `<div>${item.marker} ${item.seriesName}: ${percent}%</div>`
+                  res += `<div style="margin-left: 16px;">当日净值：${Number(nav).toFixed(4)}</div>`
               })
               return res;
           }
