@@ -467,6 +467,30 @@ const fetchRealtimeQuote = async code => {
   }
 }
 
+const fetchRealtimeQuotesBatch = async codes => {
+  if (!codes || codes.length === 0) return {}
+  try {
+    const response = await fundAPI.batchEstimate(codes)
+    const items = response?.data?.data || []
+    const result = {}
+    items.forEach(item => {
+      if (item.error) return
+      // 估值时间格式: "2026-05-22 15:00"，净值日期格式: "2026-05-22"
+      // 优先展示估值净值（实时），没有则用单位净值（最新公布）
+      const nav = Number(item.estimate_value || item.net_worth)
+      if (Number.isNaN(nav)) return
+      result[item.fund_code] = {
+        nav,
+        time: item.estimate_time || item.net_worth_date || '--'
+      }
+    })
+    return result
+  } catch (error) {
+    console.error('批量获取实时估值失败:', error)
+    return {}
+  }
+}
+
 const fillCostByDateRule = async () => {
   const code = String(form.code || '').trim()
   if (!/^\d{6}$/.test(code) || !form.purchaseDate || !form.purchaseTime) return
@@ -513,22 +537,21 @@ const refreshRealtimeQuotes = async () => {
   if (positions.value.length === 0) return
   const codes = [...new Set(positions.value.map(item => item.code).filter(Boolean))]
 
-  try {
-    const results = await Promise.allSettled(codes.map(code => fetchRealtimeQuote(code)))
-    const nextMap = { ...quoteMap.value }
+  const batchResult = await fetchRealtimeQuotesBatch(codes)
 
-    results.forEach((result, index) => {
-      const code = codes[index]
+  // 批量接口未返回的基金，逐个兜底
+  const missing = codes.filter(code => !batchResult[code])
+  if (missing.length > 0) {
+    const fallbackResults = await Promise.allSettled(missing.map(code => fetchRealtimeQuote(code)))
+    fallbackResults.forEach((result, index) => {
       if (result.status === 'fulfilled' && result.value) {
-        nextMap[code] = result.value
+        batchResult[missing[index]] = result.value
       }
     })
-
-    quoteMap.value = nextMap
-    lastRefreshTime.value = new Date().toLocaleString('zh-CN')
-  } catch (error) {
-    console.error('刷新实时估值失败:', error)
   }
+
+  quoteMap.value = { ...quoteMap.value, ...batchResult }
+  lastRefreshTime.value = new Date().toLocaleString('zh-CN')
 }
 
 const loadHistoryForPositions = async () => {

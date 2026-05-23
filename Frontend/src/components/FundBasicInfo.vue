@@ -215,6 +215,23 @@ export default {
     // 处理基金数据（可来自父组件传递或自己请求）
     processFundData(data) {
       const realtime = data.realtime_estimate || {}
+
+      // 兜底：如果 fundgz 的单位净值日期比走势图数据旧，用走势图最新净值
+      let dwjz = realtime.net_worth
+      let jzrq = realtime.net_worth_date
+      const netWorthTrend = data.net_worth_trend || []
+      if (netWorthTrend.length > 0) {
+        // 找最新日期的净值
+        const sorted = [...netWorthTrend]
+          .filter(item => item.date && item.net_worth != null)
+          .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+        const latest = sorted[0]
+        if (latest && (!jzrq || (latest.date > jzrq))) {
+          dwjz = String(latest.net_worth)
+          jzrq = latest.date
+        }
+      }
+
       this.fundInfo = {
         ...data,
         ...data.basic_info,
@@ -229,9 +246,9 @@ export default {
         syl_3y: data.performance?.['3_month_return'],
         syl_6y: data.performance?.['6_month_return'],
         syl_1n: data.performance?.['1_year_return'],
-        // 映射实时估值数据
-        dwjz: realtime.net_worth,          // 单位净值
-        jzrq: realtime.net_worth_date,     // 净值日期
+        // 映射实时估值数据（已用走势图最新净值兜底）
+        dwjz: dwjz,                        // 单位净值
+        jzrq: jzrq,                        // 净值日期
         gsz: realtime.estimate_value,       // 估算净值
         gszzl: realtime.estimate_change,    // 估算涨跌幅
         gztime: realtime.estimate_time      // 估值时间

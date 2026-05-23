@@ -831,6 +831,48 @@ def refresh_watchlist_estimates():
     })
 
 
+@app.route('/api/fund/batch-estimate', methods=['POST'])
+def batch_estimate():
+    """
+    批量获取基金实时估值（轻量级接口，仅调用 fundgz API）
+    专为持仓页面设计，避免每次拉取完整的基金详情数据
+    """
+    data = request.get_json() or {}
+    fund_codes = data.get('fund_codes', [])
+
+    if not fund_codes:
+        return jsonify({'error': 'fund_codes is required'}), 400
+
+    results = []
+    for fund_code in fund_codes:
+        try:
+            real_time_url = f"http://fundgz.1234567.com.cn/js/{fund_code}.js"
+            response = requests.get(real_time_url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }, timeout=3)
+
+            if response.status_code == 200:
+                match = re.search(r"jsonpgz\((.*?)\);", response.text)
+                if match:
+                    rt_data = json.loads(match.group(1))
+                    if rt_data:
+                        results.append({
+                            'fund_code': fund_code,
+                            'name': rt_data.get('name'),
+                            'net_worth': rt_data.get('dwjz'),       # 单位净值
+                            'net_worth_date': rt_data.get('jzrq'),  # 净值日期
+                            'estimate_value': rt_data.get('gsz'),   # 估算净值
+                            'estimate_change': rt_data.get('gszzl'),# 估算涨跌幅
+                            'estimate_time': rt_data.get('gztime')  # 估值时间
+                        })
+            if not results or results[-1].get('fund_code') != fund_code:
+                results.append({'fund_code': fund_code, 'error': 'Failed to fetch'})
+        except Exception as e:
+            results.append({'fund_code': fund_code, 'error': str(e)})
+
+    return jsonify({'data': results})
+
+
 # ==================== 风险指标计算 ====================
 
 def calculate_risk_metrics(net_worth_trend):

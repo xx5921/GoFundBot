@@ -55,6 +55,11 @@ export const fundAPI = {
   // AI分析基金
   analyzeFund(fundCode) {
     return api.get(`/fund/${fundCode}/analyze`)
+  },
+
+  // 批量获取基金实时估值（轻量级，仅 fundgz API）
+  batchEstimate(fundCodes) {
+    return api.post('/fund/batch-estimate', { fund_codes: fundCodes })
   }
 }
 

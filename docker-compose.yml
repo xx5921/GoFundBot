@@ -1,0 +1,27 @@
+services:
+  backend:
+    build: ./Backend
+    container_name: gofundbot-backend
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./Backend:/app
+      - ./Data:/app/Data
+    env_file:
+      - ./Backend/.env
+    environment:
+      - FLASK_APP=app.py
+      - TZ=Asia/Shanghai
+
+  frontend:
+    build: ./Frontend
+    container_name: gofundbot-frontend
+    ports:
+      - "3100:5173"
+    volumes:
+      - ./Frontend:/app
+      - /app/node_modules
+    environment:
+      - TZ=Asia/Shanghai
+    depends_on:
+      - backend
