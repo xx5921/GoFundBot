@@ -486,21 +486,28 @@ def get_watchlist():
         # 默认用 FundEstimate 的数据
         net_worth = estimate.net_worth if estimate else None
         net_worth_date = estimate.net_worth_date if estimate else None
+        actual_change = estimate.estimate_change if estimate else None  # 默认用 fundgz 估算涨跌幅
 
         # 检查走势数据中是否有更新的实际净值
         if trend and trend.net_worth_trend_json:
             trend_data = _json_loads(trend.net_worth_trend_json, [])
             if trend_data:
-                # 找最新日期的净值
                 valid = [t for t in trend_data if t.get('date') and t.get('net_worth') is not None]
                 if valid:
                     valid.sort(key=lambda x: x['date'])
                     latest = valid[-1]
                     trend_date = latest['date']
+                    latest_nav = float(latest['net_worth'])
                     # 如果走势数据比 FundEstimate 的净值日期更新，使用走势数据
                     if not net_worth_date or trend_date > net_worth_date:
                         net_worth = str(latest['net_worth'])
                         net_worth_date = trend_date
+
+                    # 用走势数据计算实际涨跌幅（最新两个交易日）
+                    if len(valid) >= 2:
+                        prev_nav = float(valid[-2]['net_worth'])
+                        if prev_nav > 0:
+                            actual_change = round((latest_nav - prev_nav) / prev_nav * 100, 2)
 
         fund_data = {
             'fund_code': item.fund_code,
@@ -512,7 +519,7 @@ def get_watchlist():
             'net_worth': net_worth,
             'net_worth_date': net_worth_date,
             'estimate_value': estimate.estimate_value if estimate else None,
-            'estimate_change': estimate.estimate_change if estimate else None,
+            'estimate_change': actual_change,
             'estimate_time': estimate.estimate_time if estimate else None
         }
         funds_data.append(fund_data)
@@ -856,6 +863,7 @@ def refresh_watchlist_estimates():
                         ).first()
                         net_worth_val = rt_data.get('dwjz')
                         net_worth_date_val = rt_data.get('jzrq')
+                        actual_change_val = rt_data.get('gszzl')  # 默认用 fundgz 估算
                         if trend_record and trend_record.net_worth_trend_json:
                             trend_data = _json_loads(trend_record.net_worth_trend_json, [])
                             if trend_data:
@@ -863,18 +871,24 @@ def refresh_watchlist_estimates():
                                 if valid:
                                     valid.sort(key=lambda x: x['date'])
                                     latest = valid[-1]
+                                    latest_nav_val = float(latest['net_worth'])
                                     if not net_worth_date_val or latest['date'] > net_worth_date_val:
                                         net_worth_val = str(latest['net_worth'])
                                         net_worth_date_val = latest['date']
                                         # 同时更新 FundEstimate
                                         estimate_record.net_worth = net_worth_val
                                         estimate_record.net_worth_date = net_worth_date_val
+                                    # 用走势数据计算实际涨跌幅
+                                    if len(valid) >= 2:
+                                        prev_nav_val = float(valid[-2]['net_worth'])
+                                        if prev_nav_val > 0:
+                                            actual_change_val = round((latest_nav_val - prev_nav_val) / prev_nav_val * 100, 2)
 
                         updated_count += 1
                         results.append({
                             'fund_code': fund_code,
                             'estimate_value': rt_data.get('gsz'),
-                            'estimate_change': rt_data.get('gszzl'),
+                            'estimate_change': actual_change_val,
                             'estimate_time': rt_data.get('gztime'),
                             'net_worth': net_worth_val,
                             'net_worth_date': net_worth_date_val

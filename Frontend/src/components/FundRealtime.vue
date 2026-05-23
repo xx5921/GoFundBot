@@ -122,7 +122,7 @@
         </div>
 
         <div class="c-hero">
-          <div class="hero-chip" :class="getChangeClass(fund.gszzl)">{{ formatChange(fund.gszzl) }}</div>
+          <div class="hero-chip" :class="getChangeClass(getChangeRate(fund))">{{ formatChange(getChangeRate(fund)) }}</div>
           <div class="hero-chip" :class="getHoldingProfitTodayClass(fund)" v-if="holdings[fund.code]">
             {{ getHoldingProfitToday(fund) >= 0 ? '+' : '' }}¥{{ getHoldingProfitToday(fund).toFixed(2) }}
           </div>
@@ -543,6 +543,16 @@ export default {
       return (num >= 0 ? '+' : '') + num.toFixed(2) + '%'
     }
 
+    // 涨跌幅：有实际净值用实际的，没有则用 fundgz 估算
+    const getChangeRate = (fund) => {
+      const bestNav = getBestNav(fund)
+      const prevNav = getPrevTradingNav(fund)
+      if (bestNav > 0 && prevNav > 0) {
+        return ((bestNav - prevNav) / prevNav) * 100
+      }
+      return parseFloat(fund.gszzl) || 0
+    }
+
     // 持仓成本 = 平均成本 × 份额
     const getHoldingAmount = (fund) => {
       const h = holdings.value[fund.code]
@@ -551,50 +561,42 @@ export default {
       return h.share * nav
     }
 
-    // 获取最优净值：走势数据最新 > 今日实时估值 > fundgz 官方净值
+    // 获取最优净值：按日期选最新的（走势实际净值 > 官方净值 > 实时估值）
     const getBestNav = (fund) => {
-      const todayStr = new Date().toISOString().split('T')[0]
-      const dwjz = parseFloat(fund.dwjz)    // fundgz 最新公布净值
-      const gsz = parseFloat(fund.gsz)       // fundgz 实时估值
-      const jzrq = fund.jzrq || ''           // fundgz 净值日期
+      // 收集所有可用的 (value, date) 对
+      const candidates = []
 
-      // 走势数据（pingzhongdata，通常比 fundgz 的 dwjz 更新）
+      // fundgz 官方净值
+      const dwjz = parseFloat(fund.dwjz)
+      if (dwjz > 0 && fund.jzrq) {
+        candidates.push({ value: dwjz, date: fund.jzrq })
+      }
+      // fundgz 实时估值
+      const gsz = parseFloat(fund.gsz)
+      const gszDate = (fund.gztime || '').slice(0, 10)
+      if (gsz > 0 && gszDate) {
+        candidates.push({ value: gsz, date: gszDate })
+      }
+      // 走势数据实际净值
       const trend = getFundTrendSeries(fund)
-      let trendNav = 0
-      let trendDate = ''
       if (trend.length > 0) {
         const latest = trend[trend.length - 1]
-        trendNav = latest.nav
-        trendDate = latest.date
+        if (latest && latest.nav > 0 && latest.date) {
+          candidates.push({ value: latest.nav, date: latest.date })
+        }
       }
 
-      // 1. 今日有实时估值（交易时段）→ 用估值
-      if (gsz > 0 && fund.gztime && fund.gztime.slice(0, 10) === todayStr) {
-        return gsz
-      }
-
-      // 2. 走势数据比 fundgz 的净值日期更新 → 用走势数据（实际净值已公布）
-      if (trendNav > 0 && trendDate > jzrq) {
-        return trendNav
-      }
-
-      // 3. fundgz 官方净值日期就是今天 → 用官方净值
-      if (jzrq === todayStr && dwjz > 0) return dwjz
-
-      // 4. 兜底：估值 > 官方净值 > 走势
-      return gsz || dwjz || trendNav || 0
+      // 按日期排序，取最新的
+      if (candidates.length === 0) return 0
+      candidates.sort((a, b) => b.date.localeCompare(a.date))
+      return candidates[0].value
     }
 
-    // 获取上一交易日净值（用于计算今日涨跌）
+    // 获取上一交易日净值（走势数据倒数第二个）
     const getPrevTradingNav = (fund) => {
       const trend = getFundTrendSeries(fund)
       if (trend.length >= 2) {
-        // 如果最新净值日期是今天，用倒数第二个；否则用最后一个（即昨天）
-        const todayStr = new Date().toISOString().split('T')[0]
-        const last = trend[trend.length - 1]
-        const prev = trend[trend.length - 2]
-        if (last.date === todayStr && prev) return prev.nav
-        return last.nav
+        return trend[trend.length - 2].nav
       }
       return parseFloat(fund.dwjz) || 0
     }
@@ -1454,6 +1456,7 @@ export default {
       getChangeClass,
       formatGsz,
       formatChange,
+      getChangeRate,
       getBestNav,
       getDisplayNav,
       getHoldingAmount,
