@@ -486,6 +486,8 @@ class AIService:
 - 考虑当前市场估值水平和基金近期走势
 - 注意区分交易时间和非交易时间的操作建议
 - 如果用户持有不足7天，赎回建议要特别谨慎
+- 优先参考明确的量化策略信号，不要忽略策略命中情况
+- 若策略信号与其他辅助信息冲突，需在 reason 中说明冲突点与最终取舍
 
 **输出格式（严格JSON，不要任何额外内容）**：
 ```json
@@ -505,6 +507,23 @@ class AIService:
 - 处于中位区域（35%-65%）盈亏不大 → 持有观望
 - 获利超过15%且净值处于高位 → 逐步减仓
 - 获利超过30%或净值处于极高位置 → 清仓卖出
+
+**新增优先操作策略（必须重点参考）**：
+一、减仓/清仓卖出情况：
+1. 当连续3日单位净值增长（包括今日估值）；
+2. 当整体盈利大于10%；
+3. 当日估值涨幅大于5%。
+若以上减仓/卖出信号命中越多，越倾向给出“逐步减仓”或“清仓卖出”。
+
+二、加仓/买入情况：
+1. 当连续3日单位净值减少（包括今日估值），且3个月内整体单位净值有上升趋势；
+2. 当日估值跌幅大于5%，且3个月内整体单位净值有上升趋势。
+若以上加仓/买入信号命中越多，越倾向给出“强烈加仓”或“适度加仓”。
+
+三、持有观望情况：
+1. 买卖策略均未明显命中；
+2. 买卖信号冲突；
+3. 策略命中较弱但存在交易规则限制（如持有不足7天）。
 
 注意：以上仅为参考框架，请结合具体数据灵活判断，不要机械套用。"""
             result = self._call_llm_simple(prompt, system_prompt)
@@ -534,6 +553,54 @@ class AIService:
         is_trading_day = now.weekday() < 5  # 简单判断，不考虑节假日
         is_before_1500 = current_time < '15:00'
 
+        sorted_trend = sorted(
+            [t for t in net_worth_trend if t.get('date') and t.get('net_worth') is not None],
+            key=lambda x: x['date']
+        ) if net_worth_trend else []
+
+        estimate_nav = self._safe_float(realtime.get('estimate_value'))
+        estimate_change = self._safe_float(realtime.get('estimate_change'))
+        latest_nav = self._safe_float(
+            realtime.get('latest_net_worth') or realtime.get('net_worth')
+        )
+        current_nav = estimate_nav or latest_nav
+
+        recent_three_points = []
+        if len(sorted_trend) >= 2:
+            recent_three_points = sorted_trend[-2:]
+        elif len(sorted_trend) == 1:
+            recent_three_points = sorted_trend[-1:]
+
+        if current_nav is not None:
+            current_date = realtime.get('estimate_time') or today_str
+            recent_three_points = recent_three_points + [{
+                'date': str(current_date)[:10],
+                'net_worth': current_nav
+            }]
+
+        recent_three_navs = []
+        for point in recent_three_points[-3:]:
+            nav = self._safe_float(point.get('net_worth'))
+            if nav is not None:
+                recent_three_navs.append(nav)
+
+        is_three_day_up = (
+            len(recent_three_navs) == 3 and
+            recent_three_navs[0] < recent_three_navs[1] < recent_three_navs[2]
+        )
+        is_three_day_down = (
+            len(recent_three_navs) == 3 and
+            recent_three_navs[0] > recent_three_navs[1] > recent_three_navs[2]
+        )
+
+        three_month_uptrend = False
+        if len(sorted_trend) >= 2:
+            recent_3m = sorted_trend[-60:] if len(sorted_trend) >= 60 else sorted_trend
+            first_nav = self._safe_float(recent_3m[0].get('net_worth'))
+            last_nav = self._safe_float(recent_3m[-1].get('net_worth'))
+            if first_nav is not None and last_nav is not None and last_nav > first_nav:
+                three_month_uptrend = True
+
         prompt = f"""当前时间：{today_str} {current_time}（{'交易日，' + ('15:00前' if is_before_1500 else '15:00后') if is_trading_day else '非交易日'}）
 
 ## 基金信息
@@ -546,8 +613,8 @@ class AIService:
 - 估算净值：{realtime.get('estimate_value', '未知')}
 - 估算涨跌幅：{realtime.get('estimate_change', '未知')}%
 - 估值时间：{realtime.get('estimate_time', '未知')}
-- 最新单位净值：{realtime.get('net_worth', '未知')}
-- 净值日期：{realtime.get('net_worth_date', '未知')}
+- 最新单位净值：{realtime.get('latest_net_worth', realtime.get('net_worth', '未知'))}
+- 净值日期：{realtime.get('latest_net_worth_date', realtime.get('net_worth_date', '未知'))}
 
 ## 业绩表现
 - 近1月：{performance.get('1_month_return', '未知')}%
@@ -567,25 +634,18 @@ class AIService:
 """
 
         # 近期走势摘要
-        if net_worth_trend:
-            sorted_trend = sorted(
-                [t for t in net_worth_trend if t.get('date') and t.get('net_worth') is not None],
-                key=lambda x: x['date']
-            )
-            if len(sorted_trend) >= 5:
-                recent = sorted_trend[-10:]
-                prompt += "\n## 近10个交易日净值走势\n"
-                for p in recent:
-                    prompt += f"- {p['date']}: {p['net_worth']}\n"
+        if sorted_trend and len(sorted_trend) >= 5:
+            recent = sorted_trend[-10:]
+            prompt += "\n## 近10个交易日净值走势\n"
+            for p in recent:
+                prompt += f"- {p['date']}: {p['net_worth']}\n"
 
-                # 60日高低点
-                recent60 = sorted_trend[-60:] if len(sorted_trend) >= 60 else sorted_trend
-                vals = [float(t['net_worth']) for t in recent60]
-                prompt += f"\n近{len(recent60)}日最高净值: {max(vals)}, 最低净值: {min(vals)}"
-                if realtime.get('estimate_value'):
-                    cur = float(realtime['estimate_value'])
-                    pos_pct = round((cur - min(vals)) / (max(vals) - min(vals)) * 100, 1) if max(vals) > min(vals) else 50
-                    prompt += f"\n当前净值在近{len(recent60)}日区间位置: {pos_pct}%（0%为最低点，100%为最高点）"
+            recent60 = sorted_trend[-60:] if len(sorted_trend) >= 60 else sorted_trend
+            vals = [float(t['net_worth']) for t in recent60]
+            prompt += f"\n近{len(recent60)}日最高净值: {max(vals)}, 最低净值: {min(vals)}"
+            if current_nav is not None:
+                pos_pct = round((current_nav - min(vals)) / (max(vals) - min(vals)) * 100, 1) if max(vals) > min(vals) else 50
+                prompt += f"\n当前净值在近{len(recent60)}日区间位置: {pos_pct}%（0%为最低点，100%为最高点）"
 
         # 持仓信息
         purchase_date = position.get('purchase_date', '未知')
@@ -594,7 +654,7 @@ class AIService:
         shares = float(position.get('shares', 0))
         cost_amount = cost * shares
 
-        cur_nav = float(realtime.get('estimate_value') or realtime.get('net_worth') or cost)
+        cur_nav = float(current_nav or cost)
         market_value = shares * cur_nav
         profit = market_value - cost_amount
         profit_rate = (profit / cost_amount * 100) if cost_amount > 0 else 0
@@ -618,14 +678,34 @@ class AIService:
 - 已持有天数：{hold_days}天
 """
 
+        prompt += f"""
+## 策略信号检测
+- 连续3日单位净值增长（含今日估值）：{'是' if is_three_day_up else '否'}
+- 连续3日单位净值减少（含今日估值）：{'是' if is_three_day_down else '否'}
+- 近3个月整体单位净值上升趋势：{'是' if three_month_uptrend else '否'}
+- 整体盈利大于10%：{'是' if profit_rate > 10 else '否'}
+- 当日估值涨幅大于5%：{'是' if estimate_change is not None and estimate_change > 5 else '否'}
+- 当日估值跌幅大于5%：{'是' if estimate_change is not None and estimate_change < -5 else '否'}
+"""
+
         if hold_days > 0 and hold_days < 7:
             prompt += "\n⚠️ 注意：持有不足7天，赎回将产生1.5%惩罚性赎回费！"
 
         prompt += f"""
 ---
-请基于以上数据，结合当前时间（{today_str} {current_time}，{'交易日' if is_trading_day else '非交易日'}），给出专业的持仓操作建议。"""
+请严格结合以上“策略信号检测”结果、当前时间（{today_str} {current_time}，{'交易日' if is_trading_day else '非交易日'}）和基金交易规则，给出专业的持仓操作建议。若命中了明确策略，请在 summary、reason、key_points 中明确说明命中了哪些策略。"""
 
         return prompt
+
+    @staticmethod
+    def _safe_float(value: Any) -> Optional[float]:
+        """安全转换为浮点数。"""
+        try:
+            if value is None or value == '':
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     def _parse_position_advice_result(self, result: str) -> Dict[str, Any]:
         """解析持仓建议分析结果"""
