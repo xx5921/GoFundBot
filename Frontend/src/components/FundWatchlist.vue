@@ -280,11 +280,17 @@ export default {
           watchlist.value.forEach(fund => {
             const newEstimate = estimateMap[fund.fund_code]
             if (newEstimate) {
+              fund.latest_net_worth = newEstimate.latest_net_worth
+              fund.latest_net_worth_date = newEstimate.latest_net_worth_date
+              fund.latest_change = newEstimate.latest_change
+              fund.previous_net_worth = newEstimate.previous_net_worth
+              fund.previous_net_worth_date = newEstimate.previous_net_worth_date
+              fund.official_net_worth = newEstimate.official_net_worth
+              fund.official_net_worth_date = newEstimate.official_net_worth_date
               fund.estimate_value = newEstimate.estimate_value
               fund.estimate_change = newEstimate.estimate_change
               fund.estimate_time = newEstimate.estimate_time
-              fund.net_worth = newEstimate.net_worth
-              fund.net_worth_date = newEstimate.net_worth_date
+              fund.latest_source = newEstimate.latest_source
             }
           })
           

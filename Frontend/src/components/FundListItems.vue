@@ -49,13 +49,13 @@
 
       <!-- 最新净值 -->
       <div class="col-nav">
-        <div class="nav-value">{{ getLatestNav(fund) }}</div>
-        <div class="nav-date">{{ getLatestNavDate(fund) }}</div>
+        <div class="nav-value">{{ formatNav(fund.latest_net_worth) }}</div>
+        <div class="nav-date">{{ formatDate(fund.latest_net_worth_date) }}</div>
       </div>
 
-      <!-- 日涨跌幅 -->
-      <div class="col-change" :class="getChangeClass(fund.estimate_change)">
-        {{ formatChange(fund.estimate_change) }}
+      <!-- 右侧涨幅优先显示实时估算涨幅，缺失时回退最新实际涨幅 -->
+      <div class="col-change" :class="getChangeClass(getDisplayChange(fund))">
+        {{ formatChange(getDisplayChange(fund)) }}
       </div>
 
       <!-- 操作按钮 -->
@@ -119,22 +119,19 @@ export default {
       if (num < 0) return 'change-down'
       return 'change-flat'
     },
-    getLatestNav(fund) {
-      const netWorthDate = (fund.net_worth_date || '').slice(0, 10)
-      const estimateDate = (fund.estimate_time || '').slice(0, 10)
-      // 估值日期比净值日期更新 → 用估值
-      if (estimateDate && estimateDate > netWorthDate) {
-        return fund.estimate_value || fund.net_worth || '--'
+    getDisplayChange(fund) {
+      if (fund.estimate_change !== null && fund.estimate_change !== undefined && fund.estimate_change !== '') {
+        return fund.estimate_change
       }
-      return fund.net_worth || fund.estimate_value || '--'
+      return fund.latest_change
     },
-    getLatestNavDate(fund) {
-      const netWorthDate = (fund.net_worth_date || '').slice(0, 10)
-      const estimateDate = (fund.estimate_time || '').slice(0, 10)
-      if (estimateDate && estimateDate > netWorthDate) {
-        return estimateDate
-      }
-      return netWorthDate || estimateDate
+    formatNav(value) {
+      const num = parseFloat(value)
+      if (isNaN(num)) return '--'
+      return num.toFixed(4)
+    },
+    formatDate(value) {
+      return value || '--'
     }
   }
 }

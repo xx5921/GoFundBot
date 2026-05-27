@@ -51,6 +51,108 @@ def _json_loads(data, default):
     except Exception:
         return default
 
+
+def _safe_float(value):
+    """安全转换数值为浮点数。"""
+    try:
+        if value is None or value == '':
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_latest_realtime_info(realtime_estimate, net_worth_trend):
+    """构建最新实际净值与实时估值的拆分数据。
+
+    Args:
+        realtime_estimate: 原始实时估值数据，包含官方净值与估算信息。
+        net_worth_trend: 单位净值走势列表。
+
+    Returns:
+        拆分后的实时数据字典。
+    """
+    realtime_estimate = realtime_estimate or {}
+    net_worth_trend = net_worth_trend or []
+
+    official_net_worth = realtime_estimate.get('net_worth')
+    official_net_worth_date = realtime_estimate.get('net_worth_date')
+
+    latest_net_worth = official_net_worth
+    latest_net_worth_date = official_net_worth_date
+    latest_change = None
+    previous_net_worth = None
+    previous_net_worth_date = None
+    latest_source = 'official' if official_net_worth_date else None
+
+    valid_points = []
+    for item in net_worth_trend:
+        point_date = str(item.get('date') or '').strip()[:10]
+        point_nav = _safe_float(item.get('net_worth'))
+        if point_date and point_nav is not None and point_nav > 0:
+            valid_points.append({
+                'date': point_date,
+                'nav': point_nav,
+                'raw_nav': item.get('net_worth')
+            })
+
+    if valid_points:
+        valid_points.sort(key=lambda item: item['date'])
+        latest_point = valid_points[-1]
+        trend_latest_date = latest_point['date']
+
+        if not latest_net_worth_date or trend_latest_date > latest_net_worth_date:
+            latest_net_worth = str(latest_point['raw_nav'])
+            latest_net_worth_date = trend_latest_date
+            latest_source = 'trend'
+
+        if len(valid_points) >= 2 and latest_net_worth_date == trend_latest_date:
+            previous_point = valid_points[-2]
+            if previous_point['nav'] > 0:
+                previous_net_worth = str(previous_point['raw_nav'])
+                previous_net_worth_date = previous_point['date']
+                latest_change = round(
+                    (latest_point['nav'] - previous_point['nav']) / previous_point['nav'] * 100,
+                    2
+                )
+
+    return {
+        'name': realtime_estimate.get('name'),
+        'fund_code': realtime_estimate.get('fund_code'),
+        'official_net_worth': official_net_worth,
+        'official_net_worth_date': official_net_worth_date,
+        'latest_net_worth': latest_net_worth,
+        'latest_net_worth_date': latest_net_worth_date,
+        'latest_change': latest_change,
+        'latest_source': latest_source,
+        'previous_net_worth': previous_net_worth,
+        'previous_net_worth_date': previous_net_worth_date,
+        'estimate_value': realtime_estimate.get('estimate_value'),
+        'estimate_change': realtime_estimate.get('estimate_change'),
+        'estimate_time': realtime_estimate.get('estimate_time'),
+        'net_worth': official_net_worth,
+        'net_worth_date': official_net_worth_date
+    }
+
+
+def _attach_realtime_snapshot(data):
+    """为基金数据补充拆分后的实时净值快照。
+
+    Args:
+        data: 基金完整数据字典。
+
+    Returns:
+        补充后的基金数据字典。
+    """
+    if not data:
+        return data
+
+    data['realtime_estimate'] = _build_latest_realtime_info(
+        data.get('realtime_estimate', {}),
+        data.get('net_worth_trend', [])
+    )
+    return data
+
 def _build_cached_response(db: Session, fund_code: str):
     basic = db.query(FundBasicInfo).filter(FundBasicInfo.fund_code == fund_code).first()
     trend = db.query(FundTrend).filter(FundTrend.fund_code == fund_code).first()
@@ -305,7 +407,7 @@ def get_fund_detail(fund_code):
             print(f"Error saving to database: {e}")
             db.rollback()
 
-        return jsonify(fund_data)
+        return jsonify(_attach_realtime_snapshot(fund_data))
     
     # 如果API获取失败，尝试从数据库获取缓存数据作为兜底
     cached_data = _build_cached_response(db, fund_code)
@@ -477,37 +579,21 @@ def get_watchlist():
             'sort_order': group.sort_order
         })
     
-    # 构建基金数据（净值优先用走势数据中最新的实际净值）
+        # 构建基金数据（最新实际净值与实时估值分开展示）
     funds_data = []
     for item in watchlist:
         estimate = db.query(FundEstimate).filter(FundEstimate.fund_code == item.fund_code).first()
         trend = db.query(FundTrend).filter(FundTrend.fund_code == item.fund_code).first()
-
-        # 默认用 FundEstimate 的数据
-        net_worth = estimate.net_worth if estimate else None
-        net_worth_date = estimate.net_worth_date if estimate else None
-        actual_change = estimate.estimate_change if estimate else None  # 默认用 fundgz 估算涨跌幅
-
-        # 检查走势数据中是否有更新的实际净值
-        if trend and trend.net_worth_trend_json:
-            trend_data = _json_loads(trend.net_worth_trend_json, [])
-            if trend_data:
-                valid = [t for t in trend_data if t.get('date') and t.get('net_worth') is not None]
-                if valid:
-                    valid.sort(key=lambda x: x['date'])
-                    latest = valid[-1]
-                    trend_date = latest['date']
-                    latest_nav = float(latest['net_worth'])
-                    # 如果走势数据比 FundEstimate 的净值日期更新，使用走势数据
-                    if not net_worth_date or trend_date > net_worth_date:
-                        net_worth = str(latest['net_worth'])
-                        net_worth_date = trend_date
-
-                    # 用走势数据计算实际涨跌幅（最新两个交易日）
-                    if len(valid) >= 2:
-                        prev_nav = float(valid[-2]['net_worth'])
-                        if prev_nav > 0:
-                            actual_change = round((latest_nav - prev_nav) / prev_nav * 100, 2)
+        trend_data = _json_loads(trend.net_worth_trend_json, []) if trend and trend.net_worth_trend_json else []
+        realtime_snapshot = _build_latest_realtime_info({
+            'name': estimate.name if estimate else item.fund_name,
+            'fund_code': item.fund_code,
+            'net_worth': estimate.net_worth if estimate else None,
+            'net_worth_date': estimate.net_worth_date if estimate else None,
+            'estimate_value': estimate.estimate_value if estimate else None,
+            'estimate_change': estimate.estimate_change if estimate else None,
+            'estimate_time': estimate.estimate_time if estimate else None
+        }, trend_data)
 
         fund_data = {
             'fund_code': item.fund_code,
@@ -516,11 +602,17 @@ def get_watchlist():
             'group_id': item.group_id,
             'sort_order': item.sort_order,
             'created_time': item.created_time.isoformat() if item.created_time else None,
-            'net_worth': net_worth,
-            'net_worth_date': net_worth_date,
-            'estimate_value': estimate.estimate_value if estimate else None,
-            'estimate_change': actual_change,
-            'estimate_time': estimate.estimate_time if estimate else None
+            'latest_net_worth': realtime_snapshot.get('latest_net_worth'),
+            'latest_net_worth_date': realtime_snapshot.get('latest_net_worth_date'),
+            'latest_change': realtime_snapshot.get('latest_change'),
+            'previous_net_worth': realtime_snapshot.get('previous_net_worth'),
+            'previous_net_worth_date': realtime_snapshot.get('previous_net_worth_date'),
+            'official_net_worth': realtime_snapshot.get('official_net_worth'),
+            'official_net_worth_date': realtime_snapshot.get('official_net_worth_date'),
+            'estimate_value': realtime_snapshot.get('estimate_value'),
+            'estimate_change': realtime_snapshot.get('estimate_change'),
+            'estimate_time': realtime_snapshot.get('estimate_time'),
+            'latest_source': realtime_snapshot.get('latest_source')
         }
         funds_data.append(fund_data)
 
@@ -857,41 +949,37 @@ def refresh_watchlist_estimates():
                             )
                             db.add(estimate_record)
 
-                        # 检查走势数据中是否有更新的实际净值
                         trend_record = db.query(FundTrend).filter(
                             FundTrend.fund_code == fund_code
                         ).first()
-                        net_worth_val = rt_data.get('dwjz')
-                        net_worth_date_val = rt_data.get('jzrq')
-                        actual_change_val = rt_data.get('gszzl')  # 默认用 fundgz 估算
-                        if trend_record and trend_record.net_worth_trend_json:
-                            trend_data = _json_loads(trend_record.net_worth_trend_json, [])
-                            if trend_data:
-                                valid = [t for t in trend_data if t.get('date') and t.get('net_worth') is not None]
-                                if valid:
-                                    valid.sort(key=lambda x: x['date'])
-                                    latest = valid[-1]
-                                    latest_nav_val = float(latest['net_worth'])
-                                    if not net_worth_date_val or latest['date'] > net_worth_date_val:
-                                        net_worth_val = str(latest['net_worth'])
-                                        net_worth_date_val = latest['date']
-                                        # 同时更新 FundEstimate
-                                        estimate_record.net_worth = net_worth_val
-                                        estimate_record.net_worth_date = net_worth_date_val
-                                    # 用走势数据计算实际涨跌幅
-                                    if len(valid) >= 2:
-                                        prev_nav_val = float(valid[-2]['net_worth'])
-                                        if prev_nav_val > 0:
-                                            actual_change_val = round((latest_nav_val - prev_nav_val) / prev_nav_val * 100, 2)
+                        trend_data = _json_loads(
+                            trend_record.net_worth_trend_json,
+                            []
+                        ) if trend_record and trend_record.net_worth_trend_json else []
+                        realtime_snapshot = _build_latest_realtime_info({
+                            'name': rt_data.get('name'),
+                            'fund_code': fund_code,
+                            'net_worth': rt_data.get('dwjz'),
+                            'net_worth_date': rt_data.get('jzrq'),
+                            'estimate_value': rt_data.get('gsz'),
+                            'estimate_change': rt_data.get('gszzl'),
+                            'estimate_time': rt_data.get('gztime')
+                        }, trend_data)
 
                         updated_count += 1
                         results.append({
                             'fund_code': fund_code,
-                            'estimate_value': rt_data.get('gsz'),
-                            'estimate_change': actual_change_val,
-                            'estimate_time': rt_data.get('gztime'),
-                            'net_worth': net_worth_val,
-                            'net_worth_date': net_worth_date_val
+                            'latest_net_worth': realtime_snapshot.get('latest_net_worth'),
+                            'latest_net_worth_date': realtime_snapshot.get('latest_net_worth_date'),
+                            'latest_change': realtime_snapshot.get('latest_change'),
+                            'previous_net_worth': realtime_snapshot.get('previous_net_worth'),
+                            'previous_net_worth_date': realtime_snapshot.get('previous_net_worth_date'),
+                            'official_net_worth': realtime_snapshot.get('official_net_worth'),
+                            'official_net_worth_date': realtime_snapshot.get('official_net_worth_date'),
+                            'estimate_value': realtime_snapshot.get('estimate_value'),
+                            'estimate_change': realtime_snapshot.get('estimate_change'),
+                            'estimate_time': realtime_snapshot.get('estimate_time'),
+                            'latest_source': realtime_snapshot.get('latest_source')
                         })
         except Exception as e:
             # 单个基金失败不影响其他
@@ -937,15 +1025,16 @@ def batch_estimate():
                 if match:
                     rt_data = json.loads(match.group(1))
                     if rt_data:
-                        results.append({
-                            'fund_code': fund_code,
+                        realtime_snapshot = _build_latest_realtime_info({
                             'name': rt_data.get('name'),
-                            'net_worth': rt_data.get('dwjz'),       # 单位净值
-                            'net_worth_date': rt_data.get('jzrq'),  # 净值日期
-                            'estimate_value': rt_data.get('gsz'),   # 估算净值
-                            'estimate_change': rt_data.get('gszzl'),# 估算涨跌幅
-                            'estimate_time': rt_data.get('gztime')  # 估值时间
-                        })
+                            'fund_code': fund_code,
+                            'net_worth': rt_data.get('dwjz'),
+                            'net_worth_date': rt_data.get('jzrq'),
+                            'estimate_value': rt_data.get('gsz'),
+                            'estimate_change': rt_data.get('gszzl'),
+                            'estimate_time': rt_data.get('gztime')
+                        }, [])
+                        results.append(realtime_snapshot)
             if not results or results[-1].get('fund_code') != fund_code:
                 results.append({'fund_code': fund_code, 'error': 'Failed to fetch'})
         except Exception as e:
@@ -1192,7 +1281,7 @@ def get_fund_compare_data(fund_code):
                 
                 data['data_source'] = 'cache'
                 data['cache_time'] = trend_record.updated_time.isoformat() if trend_record.updated_time else None
-                return jsonify(data)
+                return jsonify(_attach_realtime_snapshot(data))
         
         # 从API获取新数据
         api_data = fund_api.get_fund_data(fund_code)
@@ -1225,7 +1314,7 @@ def get_fund_compare_data(fund_code):
                             db.commit()
                         data['risk_metrics'] = risk_metrics or {}
                     data['data_source'] = 'stale_cache'
-                    return jsonify(data)
+                    return jsonify(_attach_realtime_snapshot(data))
             return jsonify({'error': 'Failed to fetch fund data'}), 500
         
         # 计算风险指标
@@ -1241,7 +1330,7 @@ def get_fund_compare_data(fund_code):
         # 返回数据
         api_data['risk_metrics'] = risk_metrics or {}
         api_data['data_source'] = 'api'
-        return jsonify(api_data)
+        return jsonify(_attach_realtime_snapshot(api_data))
         
     except Exception as e:
         print(f"Error fetching fund compare data: {e}")

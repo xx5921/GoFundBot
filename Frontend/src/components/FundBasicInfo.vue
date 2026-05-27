@@ -50,24 +50,32 @@
       </div>
 
       <div class="header-right">
-        <!-- 涨跌幅单独展示 -->
         <div class="change-box">
-          <div class="label">估算涨幅</div>
-          <div class="value" :class="getChangeClass(fundInfo.gszzl)">
-            {{ fundInfo.gszzl ? (fundInfo.gszzl > 0 ? '+' : '') + fundInfo.gszzl + '%' : '--' }}
+          <div class="label">最新涨幅</div>
+          <div class="value" :class="getChangeClass(fundInfo.latest_change)">
+            {{ formatPercent(fundInfo.latest_change) }}
           </div>
+          <div class="date">{{ formatDate(fundInfo.latest_net_worth_date) }}</div>
         </div>
         
         <div class="net-worth-box">
-          <div class="label">单位净值</div>
-          <div class="value">{{ fundInfo.dwjz || '--' }}</div>
-          <div class="date">{{ formatDate(fundInfo.jzrq) }}</div>
+          <div class="label">最新净值</div>
+          <div class="value">{{ formatNav(fundInfo.latest_net_worth) }}</div>
+          <div class="date">{{ formatDate(fundInfo.latest_net_worth_date) }}</div>
         </div>
         
         <div class="estimate-box">
           <div class="label">估算净值</div>
-          <div class="value" :class="getChangeClass(fundInfo.gszzl)">
-            {{ fundInfo.gsz || '--' }}
+          <div class="value" :class="getChangeClass(fundInfo.estimate_change)">
+            {{ formatNav(fundInfo.estimate_value) }}
+          </div>
+          <div class="time">{{ formatTime(fundInfo.gztime) }}</div>
+        </div>
+        
+        <div class="change-box">
+          <div class="label">估算涨幅</div>
+          <div class="value" :class="getChangeClass(fundInfo.estimate_change)">
+            {{ formatPercent(fundInfo.estimate_change) }}
           </div>
           <div class="time">{{ formatTime(fundInfo.gztime) }}</div>
         </div>
@@ -216,22 +224,6 @@ export default {
     processFundData(data) {
       const realtime = data.realtime_estimate || {}
 
-      // 兜底：如果 fundgz 的单位净值日期比走势图数据旧，用走势图最新净值
-      let dwjz = realtime.net_worth
-      let jzrq = realtime.net_worth_date
-      const netWorthTrend = data.net_worth_trend || []
-      if (netWorthTrend.length > 0) {
-        // 找最新日期的净值
-        const sorted = [...netWorthTrend]
-          .filter(item => item.date && item.net_worth != null)
-          .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-        const latest = sorted[0]
-        if (latest && (!jzrq || (latest.date > jzrq))) {
-          dwjz = String(latest.net_worth)
-          jzrq = latest.date
-        }
-      }
-
       this.fundInfo = {
         ...data,
         ...data.basic_info,
@@ -246,12 +238,12 @@ export default {
         syl_3y: data.performance?.['3_month_return'],
         syl_6y: data.performance?.['6_month_return'],
         syl_1n: data.performance?.['1_year_return'],
-        // 映射实时估值数据（已用走势图最新净值兜底）
-        dwjz: dwjz,                        // 单位净值
-        jzrq: jzrq,                        // 净值日期
-        gsz: realtime.estimate_value,       // 估算净值
-        gszzl: realtime.estimate_change,    // 估算涨跌幅
-        gztime: realtime.estimate_time      // 估值时间
+        latest_net_worth: realtime.latest_net_worth,
+        latest_net_worth_date: realtime.latest_net_worth_date,
+        latest_change: realtime.latest_change,
+        estimate_value: realtime.estimate_value,
+        estimate_change: realtime.estimate_change,
+        gztime: realtime.estimate_time
       }
     },
     async fetchFundInfo() {
@@ -268,9 +260,30 @@ export default {
       }
     },
     getChangeClass(value) {
-      if (!value) return ''
+      if (value === null || value === undefined || value === '') return ''
       const num = parseFloat(value)
+      if (isNaN(num)) return ''
       return num > 0 ? 'positive' : num < 0 ? 'negative' : ''
+    },
+    formatPercent(value) {
+      if (value === null || value === undefined || value === '') {
+        return '--'
+      }
+      const num = parseFloat(value)
+      if (isNaN(num)) {
+        return '--'
+      }
+      return `${num >= 0 ? '+' : ''}${num.toFixed(2)}%`
+    },
+    formatNav(value) {
+      if (value === null || value === undefined || value === '') {
+        return '--'
+      }
+      const num = parseFloat(value)
+      if (isNaN(num)) {
+        return '--'
+      }
+      return num.toFixed(4)
     },
     getSharpeClass(value) {
       if (!value) return ''

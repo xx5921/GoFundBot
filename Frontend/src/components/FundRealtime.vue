@@ -122,7 +122,7 @@
         </div>
 
         <div class="c-hero">
-          <div class="hero-chip" :class="getChangeClass(getChangeRate(fund))">{{ formatChange(getChangeRate(fund)) }}</div>
+          <div class="hero-chip" :class="getChangeClass(getRealtimeChangeRate(fund))">{{ formatChange(getRealtimeChangeRate(fund)) }}</div>
           <div class="hero-chip" :class="getHoldingProfitTodayClass(fund)" v-if="holdings[fund.code]">
             {{ getHoldingProfitToday(fund) >= 0 ? '+' : '' }}¥{{ getHoldingProfitToday(fund).toFixed(2) }}
           </div>
@@ -196,12 +196,24 @@
 
         <div class="c-bottom-nav">
           <div class="bn-col">
-            <div class="bn-label">单位净值</div>
-            <div class="bn-val">{{ getDisplayNav(fund) }}</div>
+            <div class="bn-label">最新净值</div>
+            <div class="bn-val">{{ formatNavValue(fund.latestNav) }}</div>
+            <div class="bn-sub">{{ fund.latestNavDate || '-' }}</div>
           </div>
           <div class="bn-col">
-            <div class="bn-label">估算值</div>
-            <div class="bn-val" :class="getChangeClass(fund.gszzl)">{{ formatGsz(fund) }}</div>
+            <div class="bn-label">最新涨幅</div>
+            <div class="bn-val" :class="getChangeClass(fund.latestChange)">{{ formatChange(fund.latestChange) }}</div>
+            <div class="bn-sub">{{ fund.latestNavDate || '-' }}</div>
+          </div>
+          <div class="bn-col">
+            <div class="bn-label">估算净值</div>
+            <div class="bn-val" :class="getChangeClass(fund.estimateChange)">{{ formatNavValue(fund.estimateNav) }}</div>
+            <div class="bn-sub">{{ fund.estimateTime || '-' }}</div>
+          </div>
+          <div class="bn-col">
+            <div class="bn-label">估算涨幅</div>
+            <div class="bn-val" :class="getChangeClass(fund.estimateChange)">{{ formatChange(fund.estimateChange) }}</div>
+            <div class="bn-sub">{{ fund.estimateTime || '-' }}</div>
           </div>
         </div>
 
@@ -249,7 +261,7 @@
         </div>
 
         <div class="c-time">
-          更新时间: {{ fund.gztime || '-' }} | 净值日期: {{ fund.jzrq || '-' }}
+          最新净值日期: {{ fund.latestNavDate || '-' }} | 估算时间: {{ fund.estimateTime || '-' }}
         </div>
       </div>
     </div>
@@ -266,8 +278,8 @@
           <span class="fund-code">#{{ holdingModal.fund?.code }}</span>
           <div class="fund-nav-info">
             <span>上一交易日净值：</span>
-            <span class="nav-value">{{ holdingModal.fund?.dwjz || '-' }}</span>
-            <span class="nav-date" v-if="holdingModal.fund?.jzrq">（{{ holdingModal.fund.jzrq }}）</span>
+            <span class="nav-value">{{ formatNavValue(holdingModal.fund?.previousNav) }}</span>
+            <span class="nav-date" v-if="holdingModal.fund?.previousNavDate">（{{ holdingModal.fund.previousNavDate }}）</span>
           </div>
         </div>
 
@@ -414,7 +426,7 @@ export default {
     const metricBySort = (fund, key) => {
       if (key === 'todayProfitDesc' || key === 'todayProfitAsc') return getHoldingProfitToday(fund)
       if (key === 'totalProfitDesc') return getHoldingProfitTotal(fund)
-      return typeof fund.gszzl === 'number' ? fund.gszzl : parseFloat(fund.gszzl) || 0
+      return typeof fund.estimateChange === 'number' ? fund.estimateChange : parseFloat(fund.estimateChange) || 0
     }
 
     const sortedFunds = computed(() => {
@@ -532,9 +544,10 @@ export default {
       return num > 0 ? 'up' : num < 0 ? 'down' : ''
     }
 
-    const formatGsz = (fund) => {
-      const gsz = fund.gsz || fund.dwjz
-      return gsz ? parseFloat(gsz).toFixed(4) : '-'
+    const formatNavValue = (value) => {
+      const num = typeof value === 'number' ? value : parseFloat(value)
+      if (isNaN(num)) return '-'
+      return num.toFixed(4)
     }
 
     const formatChange = (val) => {
@@ -543,14 +556,47 @@ export default {
       return (num >= 0 ? '+' : '') + num.toFixed(2) + '%'
     }
 
-    // 涨跌幅：有实际净值用实际的，没有则用 fundgz 估算
-    const getChangeRate = (fund) => {
-      const bestNav = getBestNav(fund)
-      const prevNav = getPrevTradingNav(fund)
-      if (bestNav > 0 && prevNav > 0) {
-        return ((bestNav - prevNav) / prevNav) * 100
+    const getLatestChangeRate = (fund) => {
+      const num = typeof fund.latestChange === 'number' ? fund.latestChange : parseFloat(fund.latestChange)
+      return Number.isFinite(num) ? num : 0
+    }
+
+    const getEstimateDate = (fund) => (fund?.estimateTime || '').slice(0, 10)
+
+    const getLatestDate = (fund) => (fund?.latestNavDate || '').slice(0, 10)
+
+    const hasRealtimeEstimate = (fund) => {
+      const estimateNav = parseFloat(fund?.estimateNav)
+      const estimateDate = getEstimateDate(fund)
+      const latestDate = getLatestDate(fund)
+      return estimateNav > 0 && !!estimateDate && estimateDate > latestDate
+    }
+
+    const getCurrentNav = (fund) => {
+      if (hasRealtimeEstimate(fund)) {
+        const estimateNav = parseFloat(fund.estimateNav)
+        if (estimateNav > 0) {
+          return estimateNav
+        }
       }
-      return parseFloat(fund.gszzl) || 0
+
+      const latestNav = parseFloat(fund.latestNav)
+      if (latestNav > 0) {
+        return latestNav
+      }
+
+      const officialNav = parseFloat(fund.officialNav)
+      return officialNav > 0 ? officialNav : 0
+    }
+
+    const getRealtimeChangeRate = (fund) => {
+      if (hasRealtimeEstimate(fund)) {
+        const num = typeof fund.estimateChange === 'number'
+          ? fund.estimateChange
+          : parseFloat(fund.estimateChange)
+        return Number.isFinite(num) ? num : 0
+      }
+      return getLatestChangeRate(fund)
     }
 
     // 持仓成本 = 平均成本 × 份额
@@ -561,84 +607,52 @@ export default {
       return h.share * nav
     }
 
-    // 获取最优净值：按日期选最新的（走势实际净值 > 官方净值 > 实时估值）
-    const getBestNav = (fund) => {
-      // 收集所有可用的 (value, date) 对
-      const candidates = []
+    const getBestNav = (fund) => getCurrentNav(fund)
 
-      // fundgz 官方净值
-      const dwjz = parseFloat(fund.dwjz)
-      if (dwjz > 0 && fund.jzrq) {
-        candidates.push({ value: dwjz, date: fund.jzrq })
+    const getPrevTradingNav = (fund) => {
+      const prevNav = parseFloat(fund.previousNav)
+      if (prevNav > 0) {
+        return prevNav
       }
-      // fundgz 实时估值
-      const gsz = parseFloat(fund.gsz)
-      const gszDate = (fund.gztime || '').slice(0, 10)
-      if (gsz > 0 && gszDate) {
-        candidates.push({ value: gsz, date: gszDate })
-      }
-      // 走势数据实际净值
-      const trend = getFundTrendSeries(fund)
-      if (trend.length > 0) {
-        const latest = trend[trend.length - 1]
-        if (latest && latest.nav > 0 && latest.date) {
-          candidates.push({ value: latest.nav, date: latest.date })
-        }
-      }
-
-      // 按日期排序，取最新的
-      if (candidates.length === 0) return 0
-      candidates.sort((a, b) => b.date.localeCompare(a.date))
-      return candidates[0].value
+      const officialNav = parseFloat(fund.officialNav)
+      return officialNav > 0 ? officialNav : 0
     }
 
-    // 获取上一交易日净值（走势数据倒数第二个）
-    const getPrevTradingNav = (fund) => {
-      const trend = getFundTrendSeries(fund)
-      if (trend.length >= 2) {
-        return trend[trend.length - 2].nav
+    const getTodayReferenceNav = (fund) => {
+      if (hasRealtimeEstimate(fund)) {
+        const latestNav = parseFloat(fund.latestNav)
+        if (latestNav > 0) {
+          return latestNav
+        }
+        const officialNav = parseFloat(fund.officialNav)
+        if (officialNav > 0) {
+          return officialNav
+        }
       }
-      return parseFloat(fund.dwjz) || 0
+      return getPrevTradingNav(fund)
     }
 
     // 当前市值 = 最优净值 × 份额
     const getHoldingEstimatedAmount = (fund) => {
       const h = holdings.value[fund.code]
       if (!h || !h.share) return 0
-      return h.share * getBestNav(fund)
+      return h.share * getCurrentNav(fund)
     }
 
     // 今日收益 = 份额 × (今日净值 - 昨日净值)
     const getHoldingProfitToday = (fund) => {
       const h = holdings.value[fund.code]
       if (!h || !h.share) return 0
-      const todayNav = getBestNav(fund)
-      const prevNav = getPrevTradingNav(fund)
-      if (prevNav <= 0) return 0
-      return h.share * (todayNav - prevNav)
-    }
-
-    // 获取显示用单位净值（走势数据兜底）
-    const getDisplayNav = (fund) => {
-      const dwjz = parseFloat(fund.dwjz)
-      if (dwjz > 0) {
-        // 检查走势数据是否有更新的
-        const trend = getFundTrendSeries(fund)
-        if (trend.length > 0) {
-          const latest = trend[trend.length - 1]
-          if (latest && latest.date > (fund.jzrq || '')) {
-            return latest.nav.toFixed(4)
-          }
-        }
-        return dwjz.toFixed(4)
-      }
-      return '-'
+      const currentNav = getCurrentNav(fund)
+      const referenceNav = getTodayReferenceNav(fund)
+      if (referenceNav <= 0) return 0
+      return h.share * (currentNav - referenceNav)
     }
 
     const getHoldingProfitTotal = (fund) => {
       const h = holdings.value[fund.code]
       if (!h || !h.share || !h.cost) return 0
-      return (getBestNav(fund) - h.cost) * h.share
+      return (getCurrentNav(fund) - h.cost) * h.share
     }
 
     const getHoldingProfitTodayClass = (fund) => getHoldingProfitToday(fund) >= 0 ? 'up' : 'down'
@@ -703,15 +717,19 @@ export default {
     const mapFundDetailToRealtime = (detail, fallbackCode) => {
       const realtime = detail?.realtime_estimate || {}
       const basic = detail?.basic_info || {}
-      const changeNum = Number(realtime.estimate_change)
       return {
         code: normalizeFundCode(realtime.fund_code || basic.fund_code || fallbackCode),
         name: realtime.name || basic.fund_name || fallbackCode,
-        dwjz: realtime.net_worth,
-        gsz: realtime.estimate_value,
-        gztime: realtime.estimate_time,
-        jzrq: realtime.net_worth_date,
-        gszzl: Number.isFinite(changeNum) ? changeNum : 0,
+        latestNav: realtime.latest_net_worth,
+        latestNavDate: realtime.latest_net_worth_date,
+        latestChange: Number.isFinite(Number(realtime.latest_change)) ? Number(realtime.latest_change) : null,
+        previousNav: realtime.previous_net_worth,
+        previousNavDate: realtime.previous_net_worth_date,
+        officialNav: realtime.official_net_worth || realtime.net_worth,
+        officialNavDate: realtime.official_net_worth_date || realtime.net_worth_date,
+        estimateNav: realtime.estimate_value,
+        estimateChange: Number.isFinite(Number(realtime.estimate_change)) ? Number(realtime.estimate_change) : 0,
+        estimateTime: realtime.estimate_time,
         holdings: mapPortfolioHoldings(detail?.portfolio),
         netWorthTrend: Array.isArray(detail?.net_worth_trend) ? detail.net_worth_trend : [],
         totalReturnTrend: Array.isArray(detail?.total_return_trend) ? detail.total_return_trend : []
@@ -753,7 +771,7 @@ export default {
         const trend = getFundTrendSeries(fund)
         if (!trend || trend.length < 10) return { label: '数据不足', color: '#94a3b8' }
 
-        const nav = parseFloat(fund?.gsz) || parseFloat(fund?.dwjz) || 0
+        const nav = getBestNav(fund)
         if (nav <= 0) return { label: '数据不足', color: '#94a3b8' }
 
         const h = holdings.value[fund.code]
@@ -834,9 +852,10 @@ export default {
 
     const getFundNavByDate = (fund, dateStr) => {
       const trend = getFundTrendSeries(fund)
-      if (!trend.length) return parseFloat(fund?.dwjz) || 0
+      const fallbackNav = parseFloat(fund?.latestNav) || parseFloat(fund?.officialNav) || 0
+      if (!trend.length) return fallbackNav
       const target = String(dateStr || '').slice(0, 10)
-      if (!target) return parseFloat(fund?.dwjz) || trend[trend.length - 1].nav || 0
+      if (!target) return fallbackNav || trend[trend.length - 1].nav || 0
 
       let matched = null
       for (const point of trend) {
@@ -846,7 +865,7 @@ export default {
           break
         }
       }
-      return matched?.nav || parseFloat(fund?.dwjz) || trend[trend.length - 1].nav || 0
+      return matched?.nav || fallbackNav || trend[trend.length - 1].nav || 0
     }
 
     const getFundSparklinePoints = (fund) => {
@@ -1159,13 +1178,13 @@ export default {
       const h = holdings.value[code]
       // 如果有现有持仓，根据份额和净值计算金额
       if (h && h.share) {
-        const nav = h.cost || parseFloat(fund.dwjz) || 1
+        const nav = h.cost || parseFloat(fund.latestNav) || parseFloat(fund.officialNav) || 1
         holdingForm.value = {
           amount: (h.share * nav).toFixed(2),
-          buyDate: h.buy_date || fund.jzrq || todayDate.value
+          buyDate: h.buy_date || fund.latestNavDate || fund.officialNavDate || todayDate.value
         }
       } else {
-        holdingForm.value = { amount: '', buyDate: fund.jzrq || todayDate.value }
+        holdingForm.value = { amount: '', buyDate: fund.latestNavDate || fund.officialNavDate || todayDate.value }
       }
       // 重置加减仓表单
       modalTab.value = h && h.share ? 'trade' : 'set'
@@ -1188,7 +1207,7 @@ export default {
       const code = normalizeFundCode(fund.code)
       
       const amount = parseFloat(holdingForm.value.amount)
-      const buyDate = holdingForm.value.buyDate || fund.jzrq || todayDate.value
+      const buyDate = holdingForm.value.buyDate || fund.latestNavDate || fund.officialNavDate || todayDate.value
       const nav = getFundNavByDate(fund, buyDate)
       
       if (!amount || !nav || nav <= 0) {
@@ -1226,7 +1245,8 @@ export default {
     const getTradeNav = () => {
       const inputNav = parseFloat(tradeForm.value.nav)
       if (inputNav > 0) return inputNav
-      return parseFloat(holdingModal.value.fund?.dwjz) || 0
+      return parseFloat(holdingModal.value.fund?.previousNav) ||
+        parseFloat(holdingModal.value.fund?.officialNav) || 0
     }
 
     // 计算交易后总份额
@@ -1454,11 +1474,11 @@ export default {
       profitTodayClass,
       profitTotalClass,
       getChangeClass,
-      formatGsz,
       formatChange,
-      getChangeRate,
+      formatNavValue,
+      getLatestChangeRate,
+      getRealtimeChangeRate,
       getBestNav,
-      getDisplayNav,
       getHoldingAmount,
       getHoldingEstimatedAmount,
       getHoldingProfitToday,
