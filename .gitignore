@@ -4,3 +4,6 @@ Data/funds.db
 __pycache__/
 *.pyc
 *.env
+.idea/
+.playwright-cli/
+Frontend/dist/
